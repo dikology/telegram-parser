@@ -157,6 +157,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# Telethon session files (prefer TELEGRAM_SESSION_STRING; never commit these)
+*.session
+*.session-journal
+
 # Spyder project settings
 .spyderproject
 .spyproject

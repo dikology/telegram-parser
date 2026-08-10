@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "telegram-parser"
+version = "0.1.0"
+description = "Interactive toolkit for non-technical users to export Telegram group-chat history"
+readme = "README.md"
+authors = [
+    {name = "dikology"}
+]
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+dependencies = [
+    "python-dotenv>=1.1.0",
+    "telethon>=1.44.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/dikology/telegram-parser"
+"Bug Tracker" = "https://github.com/dikology/telegram-parser/issues"
+
+[tool.setuptools.packages.find]
+include = ["telegram_parser*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+]
