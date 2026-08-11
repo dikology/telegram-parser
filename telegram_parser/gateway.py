@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass
-from typing import Protocol
+from datetime import date, datetime, time, timedelta, timezone
+from typing import Iterable, Iterator, Protocol
 
 from telethon.sync import TelegramClient
 from telethon.tl.tlobject import TLObject, TLRequest
@@ -72,10 +73,30 @@ class Topic:
     title: str
 
 
+@dataclass(frozen=True)
+class ChatMessage:
+    id: int
+    sender: str
+    date: datetime
+    text: str = ""
+    media: str | None = None
+    reply_to: int | None = None
+    forwarded_from: str | None = None
+
+
 class TelegramGateway(Protocol):
     def list_groups(self) -> list[GroupChat]: ...
 
     def list_topics(self, chat_id: int) -> list[Topic]: ...
+
+    def iter_messages(
+        self,
+        chat_id: int,
+        *,
+        start: date,
+        end: date,
+        topic_id: int | None = None,
+    ) -> Iterable[ChatMessage]: ...
 
 
 def entity_to_group(entity) -> GroupChat | None:
@@ -92,6 +113,131 @@ def entity_to_group(entity) -> GroupChat | None:
             is_forum=bool(getattr(entity, "forum", False)),
         )
     return None
+
+
+def media_label_ru(msg) -> str | None:
+    """Russian media placeholder; never downloads. Adapted from telegram-mcp get_media_label."""
+    try:
+        if getattr(msg, "web_preview", None) is not None:
+            return None
+        sticker = getattr(msg, "sticker", None)
+        if sticker is not None:
+            alt = ""
+            for attr in getattr(sticker, "attributes", []) or []:
+                a = getattr(attr, "alt", None)
+                if a:
+                    alt = a
+                    break
+            return f"[стикер{(' ' + alt) if alt else ''}]"
+        if getattr(msg, "photo", None) is not None:
+            return "[фото]"
+        if getattr(msg, "voice", None) is not None:
+            return "[голосовое]"
+        if getattr(msg, "video_note", None) is not None:
+            return "[видеосообщение]"
+        if getattr(msg, "video", None) is not None:
+            return "[видео]"
+        if getattr(msg, "audio", None) is not None:
+            return "[аудио]"
+        if getattr(msg, "gif", None) is not None:
+            return "[gif]"
+        if getattr(msg, "document", None) is not None:
+            name = None
+            f = getattr(msg, "file", None)
+            if f is not None:
+                name = getattr(f, "name", None)
+            return f"[файл: {name}]" if name else "[файл]"
+        if getattr(msg, "contact", None) is not None:
+            return "[контакт]"
+        if getattr(msg, "geo", None) is not None:
+            return "[геолокация]"
+        if getattr(msg, "poll", None) is not None:
+            return "[опрос]"
+        if getattr(msg, "media", None) is not None:
+            return "[медиа]"
+        return None
+    except Exception:
+        return None
+
+
+def _sender_name(msg) -> str:
+    sender = getattr(msg, "sender", None)
+    if sender is None:
+        return "Unknown"
+    title = getattr(sender, "title", None)
+    if title:
+        return str(title)
+    first = getattr(sender, "first_name", "") or ""
+    last = getattr(sender, "last_name", "") or ""
+    full = f"{first} {last}".strip()
+    return full or "Unknown"
+
+
+def _user_reply_to_id(msg, topic_id: int | None = None) -> int | None:
+    """Real reply target, ignoring forum-topic root linkage."""
+    reply = getattr(msg, "reply_to", None)
+    if reply is None:
+        return None
+    reply_to_id = getattr(reply, "reply_to_msg_id", None)
+    if reply_to_id is None:
+        return None
+    top_id = getattr(reply, "reply_to_top_id", None)
+    if top_id is not None and reply_to_id == top_id:
+        return None
+    if topic_id is not None and reply_to_id == topic_id:
+        return None
+    return int(reply_to_id)
+
+
+def _forwarded_from_name(msg) -> str | None:
+    fwd = getattr(msg, "fwd_from", None)
+    if fwd is None:
+        return None
+    name = getattr(fwd, "from_name", None)
+    if name:
+        return str(name)
+    forward = getattr(msg, "forward", None)
+    if forward is None:
+        return None
+    chat = getattr(forward, "chat", None)
+    if chat is not None:
+        title = getattr(chat, "title", None)
+        if title:
+            return str(title)
+        first = getattr(chat, "first_name", "") or ""
+        last = getattr(chat, "last_name", "") or ""
+        full = f"{first} {last}".strip()
+        if full:
+            return full
+    sender = getattr(forward, "sender", None)
+    if sender is not None:
+        first = getattr(sender, "first_name", "") or ""
+        last = getattr(sender, "last_name", "") or ""
+        full = f"{first} {last}".strip()
+        if full:
+            return full
+    return None
+
+
+def message_from_telethon(msg, *, topic_id: int | None = None) -> ChatMessage:
+    text = getattr(msg, "message", None) or ""
+    reply_to = _user_reply_to_id(msg, topic_id=topic_id)
+    forwarded_from = _forwarded_from_name(msg)
+    return ChatMessage(
+        id=int(msg.id),
+        sender=_sender_name(msg),
+        date=msg.date,
+        text=str(text) if text else "",
+        media=media_label_ru(msg),
+        reply_to=reply_to,
+        forwarded_from=forwarded_from,
+    )
+
+
+def _as_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 class TelethonGateway:
@@ -130,3 +276,30 @@ class TelethonGateway:
             title = getattr(topic, "title", None) or "(без названия)"
             out.append(Topic(id=int(topic.id), title=str(title)))
         return out
+
+    def iter_messages(
+        self,
+        chat_id: int,
+        *,
+        start: date,
+        end: date,
+        topic_id: int | None = None,
+    ) -> Iterator[ChatMessage]:
+        entity = self._client.get_entity(chat_id)
+        # offset_date is exclusive upper bound when iterating newest→oldest.
+        offset_date = datetime.combine(end + timedelta(days=1), time.min, tzinfo=timezone.utc)
+        start_bound = datetime.combine(start, time.min, tzinfo=timezone.utc)
+
+        kwargs = {"offset_date": offset_date}
+        if topic_id is not None:
+            kwargs["reply_to"] = topic_id
+
+        collected: list[ChatMessage] = []
+        for msg in self._client.iter_messages(entity, **kwargs):
+            msg_date = _as_utc(msg.date)
+            if msg_date < start_bound:
+                break
+            collected.append(message_from_telethon(msg, topic_id=topic_id))
+
+        collected.reverse()  # chronological for the transcript
+        yield from collected

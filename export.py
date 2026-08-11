@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
-"""Interactive selection flow for Telegram group-chat export (no file writing yet)."""
+"""Interactive Telegram group-chat export (single-thread .txt + .json)."""
 
 from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 from telethon.sessions import StringSession
 from telethon.sync import TelegramClient
 
+from telegram_parser.export_messages import export_selection
 from telegram_parser.gateway import TelethonGateway
 from telegram_parser.selection import run_selection
 
 load_dotenv()
+
+DEFAULT_OUTPUT_DIR = Path.home() / "Downloads" / "telegram-export"
 
 
 def _connect_client() -> TelegramClient:
@@ -47,13 +51,23 @@ def _connect_client() -> TelegramClient:
 
 def main() -> None:
     print("\n----- Экспорт истории Telegram -----\n")
-    print("Выберите группу, тему (если есть) и период. Запись файлов — в следующем шаге.\n")
+    print("Выберите группу, тему (если есть) и период.\n")
 
     client = _connect_client()
     try:
         gateway = TelethonGateway(client)
-        run_selection(gateway)
-        print("Экспорт в файлы пока не реализован — выбор выше подтверждён.")
+        selection = run_selection(gateway)
+        try:
+            txt_path, json_path = export_selection(
+                selection,
+                gateway,
+                output_dir=DEFAULT_OUTPUT_DIR,
+            )
+        except ValueError as exc:
+            print(f"Ошибка: {exc}")
+            print("Выберите одну тему или обычную группу без форума.")
+            sys.exit(1)
+        print(f"Готово.\n  {txt_path}\n  {json_path}")
     finally:
         client.disconnect()
 
