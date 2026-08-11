@@ -23,7 +23,7 @@ dependencies = [
 "Bug Tracker" = "https://github.com/dikology/telegram-parser/issues"
 
 [tool.setuptools]
-py-modules = ["login"]
+py-modules = ["login", "export"]
 
 [tool.setuptools.packages.find]
 include = ["telegram_parser*"]
