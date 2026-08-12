@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import json
 import re
+import time
+from datetime import date
 from pathlib import Path
+from typing import Callable
 
 from telegram_parser.gateway import ChatMessage, TelegramGateway, Topic
-from telegram_parser.selection import Selection
+from telegram_parser.selection import PrintFn, Selection
 
 _UNSAFE_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_DEFAULT_PROGRESS_EVERY = 50
+
+SleepFn = Callable[[float], None]
 
 
 def sanitize_filename(name: str) -> str:
@@ -92,25 +98,83 @@ def _write_thread_files(
     )
 
 
+def _flood_wait_seconds(exc: BaseException) -> float | None:
+    seconds = getattr(exc, "seconds", None)
+    if isinstance(seconds, (int, float)):
+        return float(seconds)
+    return None
+
+
+def _fetch_messages(
+    gateway: TelegramGateway,
+    chat_id: int,
+    *,
+    start: date,
+    end: date,
+    topic_id: int | None,
+    print_fn: PrintFn,
+    sleep_fn: SleepFn,
+    progress_every: int,
+) -> list[ChatMessage]:
+    """Collect messages with progress output and flood-wait retry."""
+    while True:
+        try:
+            messages: list[ChatMessage] = []
+            for msg in gateway.iter_messages(
+                chat_id,
+                start=start,
+                end=end,
+                topic_id=topic_id,
+            ):
+                messages.append(msg)
+                if progress_every > 0 and len(messages) % progress_every == 0:
+                    print_fn(f"Загружено {len(messages)} сообщений…")
+            if messages and (
+                progress_every <= 0 or len(messages) % progress_every != 0
+            ):
+                print_fn(f"Загружено {len(messages)} сообщений…")
+            # Telethon yields newest→oldest; fakes may already be chronological.
+            messages.sort(key=lambda m: (m.date, m.id))
+            return messages
+        except Exception as exc:
+            seconds = _flood_wait_seconds(exc)
+            if seconds is None:
+                raise
+            print_fn(f"Telegram ограничил запросы. Ждём {int(seconds)} сек…")
+            sleep_fn(seconds)
+
+
 def export_selection(
     selection: Selection,
     gateway: TelegramGateway,
     *,
     output_dir: Path,
+    print_fn: PrintFn = print,
+    sleep_fn: SleepFn = time.sleep,
+    progress_every: int = _DEFAULT_PROGRESS_EVERY,
 ) -> list[tuple[Path, Path]]:
     """Write .txt + .json for a plain group, one topic, or all forum topics."""
     if selection.all_topics:
-        return _export_all_topics(selection, gateway, output_dir=output_dir)
+        return _export_all_topics(
+            selection,
+            gateway,
+            output_dir=output_dir,
+            print_fn=print_fn,
+            sleep_fn=sleep_fn,
+            progress_every=progress_every,
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     topic_id = selection.topic.id if selection.topic is not None else None
-    messages = list(
-        gateway.iter_messages(
-            selection.chat.id,
-            start=selection.date_range.start,
-            end=selection.date_range.end,
-            topic_id=topic_id,
-        )
+    messages = _fetch_messages(
+        gateway,
+        selection.chat.id,
+        start=selection.date_range.start,
+        end=selection.date_range.end,
+        topic_id=topic_id,
+        print_fn=print_fn,
+        sleep_fn=sleep_fn,
+        progress_every=progress_every,
     )
 
     txt_path, json_path = export_paths(selection, output_dir)
@@ -123,16 +187,21 @@ def _export_all_topics(
     gateway: TelegramGateway,
     *,
     output_dir: Path,
+    print_fn: PrintFn,
+    sleep_fn: SleepFn,
+    progress_every: int,
 ) -> list[tuple[Path, Path]]:
     written: list[tuple[Path, Path]] = []
     for topic in gateway.list_topics(selection.chat.id):
-        messages = list(
-            gateway.iter_messages(
-                selection.chat.id,
-                start=selection.date_range.start,
-                end=selection.date_range.end,
-                topic_id=topic.id,
-            )
+        messages = _fetch_messages(
+            gateway,
+            selection.chat.id,
+            start=selection.date_range.start,
+            end=selection.date_range.end,
+            topic_id=topic.id,
+            print_fn=print_fn,
+            sleep_fn=sleep_fn,
+            progress_every=progress_every,
         )
         if not messages:
             continue

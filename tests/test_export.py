@@ -198,6 +198,197 @@ def test_export_selection_passes_topic_id(tmp_path: Path):
     assert txt_path.name == "Форум_Книги_раздел_2026-06-01_2026-06-01.txt"
 
 
+class _FloodWaitLike(Exception):
+    def __init__(self, seconds: int):
+        self.seconds = seconds
+        super().__init__(f"wait {seconds}s")
+
+
+class _FloodThenOkGateway:
+    """Raises a flood-wait-like error on first iter_messages, then yields messages."""
+
+    def __init__(self, messages):
+        self._messages = list(messages)
+        self._fails_left = 1
+        self.calls = []
+
+    def list_groups(self):
+        return []
+
+    def list_topics(self, chat_id):
+        return []
+
+    def iter_messages(self, chat_id, *, start, end, topic_id=None):
+        self.calls.append(
+            {"chat_id": chat_id, "start": start, "end": end, "topic_id": topic_id}
+        )
+        if self._fails_left > 0:
+            self._fails_left -= 1
+            raise _FloodWaitLike(42)
+        return list(self._messages)
+
+
+def test_export_retries_after_flood_wait(tmp_path: Path):
+    messages = [
+        ChatMessage(
+            id=1,
+            sender="Анна",
+            date=datetime(2026, 6, 1, 14, 30, tzinfo=timezone.utc),
+            text="после ожидания",
+        ),
+    ]
+    gateway = _FloodThenOkGateway(messages)
+    selection = Selection(
+        chat=GroupChat(id=100, title="Клуб"),
+        topic=None,
+        all_topics=False,
+        date_range=DateRange(start=date(2026, 6, 1), end=date(2026, 6, 7)),
+    )
+    sleeps: list[float] = []
+    printed: list[str] = []
+
+    [(txt_path, _)] = export_selection(
+        selection,
+        gateway,
+        output_dir=tmp_path,
+        print_fn=lambda *args, **_: printed.append(" ".join(str(a) for a in args)),
+        sleep_fn=lambda seconds: sleeps.append(seconds),
+    )
+
+    assert sleeps == [42]
+    assert any("42" in line and "сек" in line for line in printed)
+    assert txt_path.read_text(encoding="utf-8") == (
+        "[2026-06-01 14:30] Анна: после ожидания\n"
+    )
+    assert len(gateway.calls) == 2
+
+
+def test_export_prints_progress_while_fetching(tmp_path: Path):
+    messages = [
+        ChatMessage(
+            id=i,
+            sender="Анна",
+            date=datetime(2026, 6, 1, 14, i, tzinfo=timezone.utc),
+            text=f"m{i}",
+        )
+        for i in range(1, 6)
+    ]
+    gateway = _FakeGateway(messages)
+    selection = Selection(
+        chat=GroupChat(id=100, title="Клуб"),
+        topic=None,
+        all_topics=False,
+        date_range=DateRange(start=date(2026, 6, 1), end=date(2026, 6, 7)),
+    )
+    printed: list[str] = []
+
+    export_selection(
+        selection,
+        gateway,
+        output_dir=tmp_path,
+        print_fn=lambda *args, **_: printed.append(" ".join(str(a) for a in args)),
+        sleep_fn=lambda _s: None,
+        progress_every=2,
+    )
+
+    assert printed == [
+        "Загружено 2 сообщений…",
+        "Загружено 4 сообщений…",
+        "Загружено 5 сообщений…",
+    ]
+
+
+def test_export_all_topics_prints_progress_while_fetching(tmp_path: Path):
+    gateway = _FakeForumGateway(
+        [Topic(id=10, title="Тема")],
+        {
+            10: [
+                ChatMessage(
+                    id=i,
+                    sender="Анна",
+                    date=datetime(2026, 6, 1, 10, i, tzinfo=timezone.utc),
+                    text=f"t{i}",
+                )
+                for i in range(1, 4)
+            ],
+        },
+    )
+    selection = Selection(
+        chat=GroupChat(id=100, title="Форум", is_forum=True),
+        topic=None,
+        all_topics=True,
+        date_range=DateRange(start=date(2026, 6, 1), end=date(2026, 6, 7)),
+    )
+    printed: list[str] = []
+
+    export_selection(
+        selection,
+        gateway,
+        output_dir=tmp_path,
+        print_fn=lambda *args, **_: printed.append(" ".join(str(a) for a in args)),
+        sleep_fn=lambda _s: None,
+        progress_every=2,
+    )
+
+    assert printed == [
+        "Загружено 2 сообщений…",
+        "Загружено 3 сообщений…",
+    ]
+
+
+def test_export_all_topics_retries_after_flood_wait(tmp_path: Path):
+    class _FloodForumGateway:
+        def __init__(self):
+            self._fails_left = 1
+            self.calls = []
+
+        def list_groups(self):
+            return []
+
+        def list_topics(self, chat_id):
+            return [Topic(id=10, title="Тема")]
+
+        def iter_messages(self, chat_id, *, start, end, topic_id=None):
+            self.calls.append({"topic_id": topic_id})
+            if self._fails_left > 0:
+                self._fails_left -= 1
+                raise _FloodWaitLike(7)
+            return [
+                ChatMessage(
+                    id=1,
+                    sender="Анна",
+                    date=datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc),
+                    text="ok",
+                )
+            ]
+
+    gateway = _FloodForumGateway()
+    selection = Selection(
+        chat=GroupChat(id=100, title="Форум", is_forum=True),
+        topic=None,
+        all_topics=True,
+        date_range=DateRange(start=date(2026, 6, 1), end=date(2026, 6, 7)),
+    )
+    sleeps: list[float] = []
+    printed: list[str] = []
+
+    written = export_selection(
+        selection,
+        gateway,
+        output_dir=tmp_path,
+        print_fn=lambda *args, **_: printed.append(" ".join(str(a) for a in args)),
+        sleep_fn=lambda seconds: sleeps.append(seconds),
+    )
+
+    assert sleeps == [7]
+    assert any("7" in line and "сек" in line for line in printed)
+    assert len(written) == 1
+    assert written[0][0].read_text(encoding="utf-8") == (
+        "[2026-06-01 10:00] Анна: ok\n"
+    )
+    assert len(gateway.calls) == 2
+
+
 class _FakeForumGateway:
     """Fake forum group: list_topics + per-topic messages."""
 

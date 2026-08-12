@@ -294,12 +294,8 @@ class TelethonGateway:
         if topic_id is not None:
             kwargs["reply_to"] = topic_id
 
-        collected: list[ChatMessage] = []
         for msg in self._client.iter_messages(entity, **kwargs):
             msg_date = _as_utc(msg.date)
             if msg_date < start_bound:
                 break
-            collected.append(message_from_telethon(msg, topic_id=topic_id))
-
-        collected.reverse()  # chronological for the transcript
-        yield from collected
+            yield message_from_telethon(msg, topic_id=topic_id)
