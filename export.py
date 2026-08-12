@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interactive Telegram group-chat export (single-thread .txt + .json)."""
+"""Interactive Telegram group-chat export (.txt + .json)."""
 
 from __future__ import annotations
 
@@ -57,17 +57,17 @@ def main() -> None:
     try:
         gateway = TelethonGateway(client)
         selection = run_selection(gateway)
-        try:
-            txt_path, json_path = export_selection(
-                selection,
-                gateway,
-                output_dir=DEFAULT_OUTPUT_DIR,
-            )
-        except ValueError as exc:
-            print(f"Ошибка: {exc}")
-            print("Выберите одну тему или обычную группу без форума.")
-            sys.exit(1)
-        print(f"Готово.\n  {txt_path}\n  {json_path}")
+        written = export_selection(
+            selection,
+            gateway,
+            output_dir=DEFAULT_OUTPUT_DIR,
+        )
+        if not written:
+            print("За выбранный период сообщений не найдено.")
+            return
+        print("Готово.")
+        for txt_path, json_path in written:
+            print(f"  {txt_path}\n  {json_path}")
     finally:
         client.disconnect()
 

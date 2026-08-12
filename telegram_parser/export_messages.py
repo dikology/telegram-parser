@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 
-from telegram_parser.gateway import ChatMessage, TelegramGateway
+from telegram_parser.gateway import ChatMessage, TelegramGateway, Topic
 from telegram_parser.selection import Selection
 
 _UNSAFE_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -58,28 +58,25 @@ def export_paths(selection: Selection, output_dir: Path) -> tuple[Path, Path]:
     return output_dir / f"{stem}.txt", output_dir / f"{stem}.json"
 
 
-def export_selection(
+def all_topics_export_paths(
     selection: Selection,
-    gateway: TelegramGateway,
-    *,
+    topic: Topic,
     output_dir: Path,
 ) -> tuple[Path, Path]:
-    """Write .txt + .json for a plain group or a single chosen topic."""
-    if selection.all_topics:
-        raise ValueError("all-topics export is not handled by single-thread export")
+    group_dir = output_dir / sanitize_filename(selection.chat.title)
+    topic_name = sanitize_filename(topic.title)
+    start = selection.date_range.start.isoformat()
+    end = selection.date_range.end.isoformat()
+    stem = f"{topic_name}_{start}_{end}"
+    return group_dir / f"{stem}.txt", group_dir / f"{stem}.json"
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    topic_id = selection.topic.id if selection.topic is not None else None
-    messages = list(
-        gateway.iter_messages(
-            selection.chat.id,
-            start=selection.date_range.start,
-            end=selection.date_range.end,
-            topic_id=topic_id,
-        )
-    )
 
-    txt_path, json_path = export_paths(selection, output_dir)
+def _write_thread_files(
+    messages: list[ChatMessage],
+    txt_path: Path,
+    json_path: Path,
+) -> None:
+    txt_path.parent.mkdir(parents=True, exist_ok=True)
     txt_path.write_text(
         "".join(format_txt_line(msg) + "\n" for msg in messages),
         encoding="utf-8",
@@ -93,4 +90,53 @@ def export_selection(
         + "\n",
         encoding="utf-8",
     )
-    return txt_path, json_path
+
+
+def export_selection(
+    selection: Selection,
+    gateway: TelegramGateway,
+    *,
+    output_dir: Path,
+) -> list[tuple[Path, Path]]:
+    """Write .txt + .json for a plain group, one topic, or all forum topics."""
+    if selection.all_topics:
+        return _export_all_topics(selection, gateway, output_dir=output_dir)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    topic_id = selection.topic.id if selection.topic is not None else None
+    messages = list(
+        gateway.iter_messages(
+            selection.chat.id,
+            start=selection.date_range.start,
+            end=selection.date_range.end,
+            topic_id=topic_id,
+        )
+    )
+
+    txt_path, json_path = export_paths(selection, output_dir)
+    _write_thread_files(messages, txt_path, json_path)
+    return [(txt_path, json_path)]
+
+
+def _export_all_topics(
+    selection: Selection,
+    gateway: TelegramGateway,
+    *,
+    output_dir: Path,
+) -> list[tuple[Path, Path]]:
+    written: list[tuple[Path, Path]] = []
+    for topic in gateway.list_topics(selection.chat.id):
+        messages = list(
+            gateway.iter_messages(
+                selection.chat.id,
+                start=selection.date_range.start,
+                end=selection.date_range.end,
+                topic_id=topic.id,
+            )
+        )
+        if not messages:
+            continue
+        txt_path, json_path = all_topics_export_paths(selection, topic, output_dir)
+        _write_thread_files(messages, txt_path, json_path)
+        written.append((txt_path, json_path))
+    return written

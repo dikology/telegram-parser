@@ -147,7 +147,7 @@ def test_export_selection_writes_txt_and_json(tmp_path: Path):
         date_range=DateRange(start=date(2026, 6, 1), end=date(2026, 6, 7)),
     )
 
-    txt_path, json_path = export_selection(selection, gateway, output_dir=tmp_path)
+    [(txt_path, json_path)] = export_selection(selection, gateway, output_dir=tmp_path)
 
     assert txt_path.name == "Клуб_книга_2026-06-01_2026-06-07.txt"
     assert json_path.name == "Клуб_книга_2026-06-01_2026-06-07.json"
@@ -192,10 +192,187 @@ def test_export_selection_passes_topic_id(tmp_path: Path):
         date_range=DateRange(start=date(2026, 6, 1), end=date(2026, 6, 1)),
     )
 
-    txt_path, _ = export_selection(selection, gateway, output_dir=tmp_path)
+    [(txt_path, _)] = export_selection(selection, gateway, output_dir=tmp_path)
 
     assert gateway.calls[0]["topic_id"] == 55
     assert txt_path.name == "Форум_Книги_раздел_2026-06-01_2026-06-01.txt"
+
+
+class _FakeForumGateway:
+    """Fake forum group: list_topics + per-topic messages."""
+
+    def __init__(self, topics: list[Topic], messages_by_topic: dict[int, list]):
+        self._topics = list(topics)
+        self._messages_by_topic = {
+            tid: list(msgs) for tid, msgs in messages_by_topic.items()
+        }
+        self.calls = []
+
+    def list_groups(self):
+        return []
+
+    def list_topics(self, chat_id):
+        self.calls.append({"op": "list_topics", "chat_id": chat_id})
+        return list(self._topics)
+
+    def iter_messages(self, chat_id, *, start, end, topic_id=None):
+        self.calls.append(
+            {
+                "op": "iter_messages",
+                "chat_id": chat_id,
+                "start": start,
+                "end": end,
+                "topic_id": topic_id,
+            }
+        )
+        return list(self._messages_by_topic.get(topic_id, []))
+
+
+def test_export_all_topics_writes_per_topic_under_group_subdir(tmp_path: Path):
+    topics = [
+        Topic(id=10, title="Книги/раздел"),
+        Topic(id=20, title="Общее"),
+    ]
+    gateway = _FakeForumGateway(
+        topics,
+        {
+            10: [
+                ChatMessage(
+                    id=1,
+                    sender="Анна",
+                    date=datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc),
+                    text="про книги",
+                ),
+            ],
+            20: [
+                ChatMessage(
+                    id=2,
+                    sender="Борис",
+                    date=datetime(2026, 6, 2, 11, 0, tzinfo=timezone.utc),
+                    text="",
+                    media="[фото]",
+                ),
+            ],
+        },
+    )
+    selection = Selection(
+        chat=GroupChat(id=100, title="Форум/клуб", is_forum=True),
+        topic=None,
+        all_topics=True,
+        date_range=DateRange(start=date(2026, 6, 1), end=date(2026, 6, 7)),
+    )
+
+    written = export_selection(selection, gateway, output_dir=tmp_path)
+
+    group_dir = tmp_path / "Форум_клуб"
+    books_txt = group_dir / "Книги_раздел_2026-06-01_2026-06-07.txt"
+    books_json = group_dir / "Книги_раздел_2026-06-01_2026-06-07.json"
+    general_txt = group_dir / "Общее_2026-06-01_2026-06-07.txt"
+    general_json = group_dir / "Общее_2026-06-01_2026-06-07.json"
+
+    assert written == [
+        (books_txt, books_json),
+        (general_txt, general_json),
+    ]
+    assert books_txt.read_text(encoding="utf-8") == (
+        "[2026-06-01 10:00] Анна: про книги\n"
+    )
+    assert json.loads(books_json.read_text(encoding="utf-8")) == [
+        {
+            "id": 1,
+            "sender": "Анна",
+            "date": "2026-06-01T10:00:00+00:00",
+            "text": "про книги",
+        },
+    ]
+    assert general_txt.read_text(encoding="utf-8") == (
+        "[2026-06-02 11:00] Борис: [фото]\n"
+    )
+    assert json.loads(general_json.read_text(encoding="utf-8")) == [
+        {
+            "id": 2,
+            "sender": "Борис",
+            "date": "2026-06-02T11:00:00+00:00",
+            "media": "[фото]",
+        },
+    ]
+    assert gateway.calls == [
+        {"op": "list_topics", "chat_id": 100},
+        {
+            "op": "iter_messages",
+            "chat_id": 100,
+            "start": date(2026, 6, 1),
+            "end": date(2026, 6, 7),
+            "topic_id": 10,
+        },
+        {
+            "op": "iter_messages",
+            "chat_id": 100,
+            "start": date(2026, 6, 1),
+            "end": date(2026, 6, 7),
+            "topic_id": 20,
+        },
+    ]
+
+
+def test_export_all_topics_skips_topics_without_messages(tmp_path: Path):
+    topics = [
+        Topic(id=10, title="Пустая"),
+        Topic(id=20, title="С сообщениями"),
+        Topic(id=30, title="Тоже пустая"),
+    ]
+    gateway = _FakeForumGateway(
+        topics,
+        {
+            20: [
+                ChatMessage(
+                    id=5,
+                    sender="Анна",
+                    date=datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc),
+                    text="есть",
+                ),
+            ],
+        },
+    )
+    selection = Selection(
+        chat=GroupChat(id=100, title="Форум", is_forum=True),
+        topic=None,
+        all_topics=True,
+        date_range=DateRange(start=date(2026, 6, 1), end=date(2026, 6, 7)),
+    )
+
+    written = export_selection(selection, gateway, output_dir=tmp_path)
+
+    group_dir = tmp_path / "Форум"
+    only_txt = group_dir / "С_сообщениями_2026-06-01_2026-06-07.txt"
+    only_json = group_dir / "С_сообщениями_2026-06-01_2026-06-07.json"
+    assert written == [(only_txt, only_json)]
+    assert only_txt.read_text(encoding="utf-8") == "[2026-06-03 12:00] Анна: есть\n"
+    assert not (group_dir / "Пустая_2026-06-01_2026-06-07.txt").exists()
+    assert not (group_dir / "Тоже_пустая_2026-06-01_2026-06-07.txt").exists()
+    assert [c for c in gateway.calls if c["op"] == "iter_messages"] == [
+        {
+            "op": "iter_messages",
+            "chat_id": 100,
+            "start": date(2026, 6, 1),
+            "end": date(2026, 6, 7),
+            "topic_id": 10,
+        },
+        {
+            "op": "iter_messages",
+            "chat_id": 100,
+            "start": date(2026, 6, 1),
+            "end": date(2026, 6, 7),
+            "topic_id": 20,
+        },
+        {
+            "op": "iter_messages",
+            "chat_id": 100,
+            "start": date(2026, 6, 1),
+            "end": date(2026, 6, 7),
+            "topic_id": 30,
+        },
+    ]
 
 
 def test_media_label_ru_photo_and_document():
