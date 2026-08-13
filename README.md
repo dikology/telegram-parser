@@ -40,7 +40,15 @@ uv --version
 cp .env.example .env
 ```
 
-Откройте `.env` в текстовом редакторе и вставьте полученные `TELEGRAM_API_ID` и `TELEGRAM_API_HASH`. Строку `TELEGRAM_SESSION_STRING` пока оставьте пустой — её запишет вход.
+Файлы, чьё имя начинается с точки (`.env`, `.env.example`), Finder и многие редакторы скрывают. Откройте `.env` из Terminal в TextEdit:
+
+```bash
+open -e .env
+```
+
+Либо в Finder нажмите **Shift+Command+.** (точка) — скрытые файлы появятся, пока не нажмёте снова.
+
+Вставьте полученные `TELEGRAM_API_ID` и `TELEGRAM_API_HASH`. Строку `TELEGRAM_SESSION_STRING` пока оставьте пустой — её запишет вход.
 
 ## 4. Войти в Telegram один раз
 
@@ -107,6 +115,10 @@ uv run export.py
 - `Ошибка: TELEGRAM_API_ID должен быть целым числом`
 - `Ошибка: TELEGRAM_SESSION_STRING не задан в .env` и `Сначала выполните: uv run login.py`
 - `Сессия недействительна. Выполните снова: uv run login.py` — снова запустите `Вход.command` (или `uv run login.py`)
+
+### Не видно .env в Finder
+
+Имя начинается с точки, такие файлы скрыты. В папке проекта в Terminal: `open -e .env`. В Finder: **Shift+Command+.**
 
 ### Telegram просит подождать (flood wait)
 
