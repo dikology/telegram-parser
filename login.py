@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # Adapted from chigwell/telegram-mcp (Apache-2.0).
 """
-QR-only Telegram session string generator for telegram-parser.
+Генератор строки сессии Telegram по QR-коду для telegram-parser.
 
-Usage:
+Запуск:
     uv run login.py
 
-Requires TELEGRAM_API_ID and TELEGRAM_API_HASH in .env (see .env.example).
-On success, offers to write TELEGRAM_SESSION_STRING into .env.
+Нужны TELEGRAM_API_ID и TELEGRAM_API_HASH в .env (см. .env.example).
+После успеха предлагает записать TELEGRAM_SESSION_STRING в .env.
 """
 
 import asyncio
@@ -31,7 +31,7 @@ load_dotenv()
 def _render_qr(qr) -> None:
     import qrcode
 
-    print("\n----- QR Code Login -----\n")
+    print("\n----- Вход по QR-коду -----\n")
 
     qr_obj = qrcode.QRCode(border=1)
     qr_obj.add_data(qr.url)
@@ -40,11 +40,11 @@ def _render_qr(qr) -> None:
     qr_obj.print_ascii(out=f, invert=True)
     print(f.getvalue())
 
-    print("Scan the QR code above with your Telegram app:")
-    print("  Open Telegram > Settings > Devices > Link Desktop Device\n")
-    print(f"Or open this link on a device where you're logged in:\n  {qr.url}\n")
-    print(f"Expires at: {qr.expires.strftime('%H:%M:%S')}")
-    print("Waiting for you to scan...")
+    print("Отсканируйте QR-код выше в приложении Telegram:")
+    print("  Откройте Telegram → Настройки → Устройства → Подключить устройство\n")
+    print(f"Или откройте эту ссылку на устройстве, где вы уже вошли:\n  {qr.url}\n")
+    print(f"Истекает в: {qr.expires.strftime('%H:%M:%S')}")
+    print("Ожидаем сканирования...")
 
 
 def _seconds_until_expiry(qr) -> float:
@@ -66,20 +66,20 @@ def _qr_login(client: TelegramClient) -> None:
             return
         except asyncio.TimeoutError:
             client.loop.run_until_complete(qr.recreate())
-            print("\nQR code expired, here is a fresh one.")
+            print("\nQR-код истёк, вот новый.")
             _render_qr(qr)
         except errors.SessionPasswordNeededError:
             while True:
                 pw = getpass.getpass(
-                    "\nTwo-factor authentication enabled. Please enter your password: "
+                    "\nВключена двухфакторная аутентификация. Введите пароль: "
                 )
                 try:
                     client.sign_in(password=pw)
                     return
                 except errors.PasswordHashInvalidError:
-                    print("Invalid password, please try again.")
+                    print("Неверный пароль, попробуйте ещё раз.")
 
-    print("\nQR code expired too many times. Please run the generator again.")
+    print("\nQR-код истёк слишком много раз. Запустите вход снова.")
     client.disconnect()
     sys.exit(1)
 
@@ -107,21 +107,21 @@ def main() -> None:
     api_hash = os.getenv("TELEGRAM_API_HASH")
 
     if not api_id or not api_hash:
-        print("Error: TELEGRAM_API_ID and TELEGRAM_API_HASH must be set in .env file")
-        print("Create an .env file with your credentials from https://my.telegram.org/apps")
+        print("Ошибка: TELEGRAM_API_ID и TELEGRAM_API_HASH должны быть заданы в .env")
+        print("Скопируйте .env.example в .env и заполните значения, которые вам передали.")
         sys.exit(1)
 
     try:
         api_id = int(api_id)
     except ValueError:
-        print("Error: TELEGRAM_API_ID must be an integer")
+        print("Ошибка: TELEGRAM_API_ID должен быть целым числом")
         sys.exit(1)
 
-    print("\n----- Telegram Session String Generator -----\n")
-    print("This script will generate a session string for your Telegram account.")
-    print("The generated session string can be added to your .env file.")
+    print("\n----- Генератор строки сессии Telegram -----\n")
+    print("Этот скрипт создаст строку сессии для вашего аккаунта Telegram.")
+    print("Её можно записать в файл .env.")
     print(
-        "\nYour credentials will NOT be stored on any server and are only used for local authentication.\n"
+        "\nВаши данные НЕ отправляются ни на какой сервер и используются только для входа на этом компьютере.\n"
     )
 
     try:
@@ -133,32 +133,32 @@ def main() -> None:
 
         session_string = StringSession.save(client.session)
 
-        print("\nAuthentication successful!")
-        print("\n----- Your Session String -----")
+        print("\nВход выполнен успешно!")
+        print("\n----- Ваша строка сессии -----")
         print(f"\n{session_string}\n")
-        print("Add this to your .env file as:")
+        print("Добавьте её в .env как:")
         print(f"TELEGRAM_SESSION_STRING={session_string}")
-        print("\nIMPORTANT: Keep this string private and never share it with anyone!")
+        print("\nВАЖНО: никому не показывайте эту строку!")
 
         try:
             choice = input(
-                "\nWould you like to automatically update your .env file with this session string? (y/N): "
+                "\nЗаписать строку сессии в .env автоматически? (y/N): "
             )
         except EOFError:
             choice = "n"
         if choice.lower() == "y":
             try:
                 _write_session_to_env(session_string)
-                print("\n.env file updated successfully!")
+                print("\nФайл .env обновлён.")
             except Exception as e:
-                print(f"\nError updating .env file: {e}")
-                print("Please manually add the session string to your .env file.")
+                print(f"\nОшибка при обновлении .env: {e}")
+                print("Добавьте строку сессии в .env вручную.")
 
         client.disconnect()
 
     except Exception as e:
-        print(f"\nError: {e}")
-        print("Failed to generate session string. Please try again.")
+        print(f"\nОшибка: {e}")
+        print("Не удалось создать строку сессии. Попробуйте ещё раз.")
         sys.exit(1)
 
 
